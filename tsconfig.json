@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    // node16 implies moduleResolution: node16 and emits CommonJS for this
+    // package (no "type" field). Replaces the deprecated node10 resolver.
+    "module": "node16",
+    "lib": ["ES2020"],
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "esModuleInterop": true,
+    "sourceMap": true,
+    "types": ["node"],
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "allowJs": false,
+    "checkJs": false,
+    // Inherited from the original codebase. Tightening these is a separate job:
+    // proxy.ts and the translators lean on loose null/any handling throughout.
+    "noImplicitAny": false,
+    "strictFunctionTypes": false,
+    "strictNullChecks": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "src/__tests__"]
+}

@@ -1,0 +1,42 @@
+{
+  "name": "antigravity-model-gateway",
+  "version": "1.0.0",
+  "description": "Local gateway that adds custom models (Ollama, LiteLLM, OpenAI/Anthropic-compatible providers) to the Antigravity IDE model dropdown",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/binilrajan3777/antigravity-model-gateway.git"
+  },
+  "main": "dist/index.js",
+  "bin": {
+    "antigravity-gateway": "dist/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prestart": "npm run build",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint \"src/**/*.ts\"",
+    "lint:fix": "eslint \"src/**/*.ts\" --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "clean": "tsc --build --clean"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@typescript-eslint/eslint-plugin": "^8.44.1",
+    "@typescript-eslint/parser": "^8.44.1",
+    "eslint": "^9.33.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.6.2",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
+  }
+}
