@@ -21,6 +21,9 @@ export interface TranslatorModule {
   mapGeminiToAnthropic?: (body: unknown, modelName: string) => unknown;
   mapAnthropicToGemini?: (res: unknown, modelName: string) => unknown;
   mapAnthropicChunkToGemini?: (chunk: unknown, modelName: string) => unknown | null;
+  mapGeminiToCodex?: (body: unknown, modelName: string) => unknown;
+  mapCodexToGemini?: (res: unknown, modelName: string) => unknown;
+  mapCodexChunkToGemini?: (chunk: unknown, modelName: string) => unknown | null;
   mapGeminiToGoogle?: (body: unknown, modelName: string) => unknown;
   mapGoogleToGemini?: (res: unknown, modelName: string) => unknown;
   mapGoogleChunkToGemini?: (chunk: unknown, modelName: string) => unknown | null;
@@ -74,12 +77,18 @@ function loadTranslators(): void {
 // Providers grouped by transport compatibility
 const OPENAI_COMPAT = new Set(['openai', 'ollama', 'openrouter', 'custom', 'groq', 'mistral', 'cerebras', 'nvidia', 'opencode', 'codestral']);
 const ANTHROPIC_COMPAT = new Set(['anthropic', 'deepseek', 'kimi', 'fireworks', 'lmstudio', 'llamacpp', 'wafer', 'zai']);
+/**
+ * Endpoints speaking the OpenAI Responses API (`POST /responses`) — a third
+ * wire format, not a dialect of the other two. See translators/codex.ts.
+ */
+const RESPONSES_COMPAT = new Set(['codex']);
 
 // ─── Public API ───────────────────────────────────────────────────────────
 
 export function getTranslator(provider: string): TranslatorModule | null {
   if (OPENAI_COMPAT.has(provider)) return translators.get('openai') || null;
   if (ANTHROPIC_COMPAT.has(provider)) return translators.get('anthropic') || null;
+  if (RESPONSES_COMPAT.has(provider)) return translators.get('codex') || null;
   if (provider === 'google') return translators.get('google') || null;
   return translators.get('openai') || null;
 }
@@ -90,6 +99,7 @@ export function translateRequest(provider: string, geminiBody: unknown, modelNam
   if (provider === 'google') return geminiBody;
   if (OPENAI_COMPAT.has(provider)) return t?.mapGeminiToOpenAI ? t.mapGeminiToOpenAI(geminiBody, modelName) : geminiBody;
   if (ANTHROPIC_COMPAT.has(provider)) return t?.mapGeminiToAnthropic ? t.mapGeminiToAnthropic(geminiBody, modelName) : geminiBody;
+  if (RESPONSES_COMPAT.has(provider)) return t?.mapGeminiToCodex ? t.mapGeminiToCodex(geminiBody, modelName) : geminiBody;
 
   // Generic: try mapGeminiTo<Provider> convention
   const fnName = `mapGeminiTo${provider.charAt(0).toUpperCase() + provider.slice(1)}`;
@@ -107,6 +117,7 @@ export function translateResponse(provider: string, providerRes: unknown, modelN
   if (provider === 'google') return providerRes;
   if (OPENAI_COMPAT.has(provider)) return t?.mapOpenAIToGemini ? t.mapOpenAIToGemini(providerRes, modelName) : providerRes;
   if (ANTHROPIC_COMPAT.has(provider)) return t?.mapAnthropicToGemini ? t.mapAnthropicToGemini(providerRes, modelName) : providerRes;
+  if (RESPONSES_COMPAT.has(provider)) return t?.mapCodexToGemini ? t.mapCodexToGemini(providerRes, modelName) : providerRes;
 
   const fnName = `map${provider.charAt(0).toUpperCase() + provider.slice(1)}ToGemini`;
   if (t && typeof t[fnName] === 'function') {
@@ -123,6 +134,7 @@ export function translateStreamChunk(provider: string, chunk: unknown, modelName
   if (provider === 'google') return t?.mapGoogleChunkToGemini ? t.mapGoogleChunkToGemini(chunk, modelName) : null;
   if (OPENAI_COMPAT.has(provider)) return t?.mapOpenAIChunkToGemini ? t.mapOpenAIChunkToGemini(chunk, modelName) : null;
   if (ANTHROPIC_COMPAT.has(provider)) return t?.mapAnthropicChunkToGemini ? t.mapAnthropicChunkToGemini(chunk, modelName) : null;
+  if (RESPONSES_COMPAT.has(provider)) return t?.mapCodexChunkToGemini ? t.mapCodexChunkToGemini(chunk, modelName) : null;
 
   const fnName = `map${provider.charAt(0).toUpperCase() + provider.slice(1)}ChunkToGemini`;
   if (t && typeof t[fnName] === 'function') {
@@ -152,7 +164,9 @@ export function getProviderHeaders(provider: string, apiKey: string): ProviderHe
 }
 
 export function supportsStreaming(provider: string): boolean {
-  return OPENAI_COMPAT.has(provider) || ANTHROPIC_COMPAT.has(provider) || provider === 'google';
+  return (
+    OPENAI_COMPAT.has(provider) || ANTHROPIC_COMPAT.has(provider) || RESPONSES_COMPAT.has(provider) || provider === 'google'
+  );
 }
 
 // ─── URL Helpers ──────────────────────────────────────────────────────────

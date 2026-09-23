@@ -34,6 +34,8 @@ export interface ModelInput {
   timeout?: number;
   maxRetries?: number;
   allowUnauthorized?: boolean;
+  /** A number pins it, 'omit' sends none, undefined leaves it to the translator. */
+  temperature?: number | 'omit';
   /** undefined keeps automatic name-based detection. */
   supportsImages?: boolean;
   /** 'keep' leaves the stored key, 'set' uses apiKey, 'clear' removes it. */
@@ -53,6 +55,8 @@ export interface ModelView {
   timeout: number | null;
   maxRetries: number | null;
   allowUnauthorized: boolean;
+  /** null when unset, i.e. the translator picks. */
+  temperature: number | 'omit' | null;
   /** null when unset, i.e. capability is auto-detected. */
   supportsImages: boolean | null;
   hasKey: boolean;
@@ -149,6 +153,7 @@ function toView(model: CustomModel, index: number): ModelView {
     timeout: model.timeout ?? null,
     maxRetries: model.maxRetries ?? null,
     allowUnauthorized: model.allowUnauthorized === true,
+    temperature: model.temperature ?? null,
     supportsImages: model.supportsImages === undefined ? null : model.supportsImages,
     hasKey: Boolean(model.apiKey && model.apiKey !== 'none'),
     keyPreview: maskKey(model.apiKey),
@@ -309,6 +314,10 @@ function applyInput(base: CustomModel | null, input: ModelInput): CustomModel {
   if (typeof input.timeout === 'number' && input.timeout > 0) next.timeout = input.timeout;
   if (typeof input.maxRetries === 'number' && input.maxRetries >= 0) next.maxRetries = input.maxRetries;
   if (input.allowUnauthorized === true) next.allowUnauthorized = true;
+  if (input.temperature === 'omit') next.temperature = 'omit';
+  else if (typeof input.temperature === 'number' && Number.isFinite(input.temperature)) {
+    next.temperature = input.temperature;
+  }
   if (typeof input.supportsImages === 'boolean') next.supportsImages = input.supportsImages;
 
   const action = input.keyAction ?? (input.apiKey !== undefined ? 'set' : 'keep');

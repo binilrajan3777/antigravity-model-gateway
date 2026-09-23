@@ -1026,6 +1026,21 @@ legend { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transfo
             <label for="f-retries">Max retries</label>
             <input type="number" id="f-retries" min="0" max="10" placeholder="3">
           </div>
+          <div class="field">
+            <label for="f-temp-mode">Temperature</label>
+            <select id="f-temp-mode">
+              <option value="">Auto — let the translator decide</option>
+              <option value="fixed">Fixed value</option>
+              <option value="omit">Never send one</option>
+            </select>
+          </div>
+          <div class="field" id="temp-value-field" hidden>
+            <label for="f-temp">Value</label>
+            <input type="number" id="f-temp" min="0" max="2" step="0.1" placeholder="0.7">
+          </div>
+          <div class="field span">
+            <span class="note" id="temp-note"></span>
+          </div>
           <div class="field span">
             <label for="f-images">Image support</label>
             <select id="f-images">
@@ -1057,17 +1072,19 @@ legend { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transfo
   'use strict';
 
   var TOKEN = ${JSON.stringify(options.token)};
-  var PROVIDERS = ['openai','anthropic','google','ollama','custom','openrouter','deepseek','groq','mistral','cerebras','kimi','fireworks','lmstudio','llamacpp','nvidia'];
+  var PROVIDERS = ['openai','anthropic','google','ollama','custom','openrouter','codex','deepseek','groq','mistral','cerebras','kimi','fireworks','lmstudio','llamacpp','nvidia'];
   var PROVIDER_HINT = {
     ollama: 'No API key needed. URL auto-normalizes.',
     anthropic: 'Anthropic Messages format, x-api-key header.',
     google: 'Google format, x-goog-api-key header.',
-    openrouter: 'OpenAI format plus referer headers.'
+    openrouter: 'OpenAI format plus referer headers.',
+    codex: 'OpenAI Responses API (/responses), bearer token. Use for kie.ai Codex.'
   };
   // Display only — the stored value is always the lowercase id.
   var PROVIDER_LABEL = {
     openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', ollama: 'Ollama',
-    custom: 'Custom', openrouter: 'OpenRouter', deepseek: 'DeepSeek', groq: 'Groq',
+    custom: 'Custom', openrouter: 'OpenRouter', codex: 'Responses API (Codex)',
+    deepseek: 'DeepSeek', groq: 'Groq',
     mistral: 'Mistral', cerebras: 'Cerebras', kimi: 'Kimi', fireworks: 'Fireworks',
     lmstudio: 'LM Studio', llamacpp: 'llama.cpp', nvidia: 'NVIDIA'
   };
@@ -1341,6 +1358,9 @@ legend { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transfo
       if (model.capabilities.supportsImages) {
         chips.push('<span class="chip img">images' + (model.supportsImages !== null ? ' set' : '') + '</span>');
       }
+      if (model.temperature !== null) {
+        chips.push('<span class="chip">' + (model.temperature === 'omit' ? 'no temp' : 'temp ' + esc(String(model.temperature))) + '</span>');
+      }
       if (model.hasKey) chips.push('<span class="chip key">key ' + esc(model.keyPreview) + '</span>');
       else chips.push('<span class="chip">no key</span>');
       if (model.allowUnauthorized) chips.push('<span class="chip bad">insecure TLS</span>');
@@ -1471,6 +1491,10 @@ legend { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transfo
     el('f-desc').value = model ? model.description : '';
     el('f-timeout').value = model && model.timeout ? model.timeout : '';
     el('f-retries').value = model && model.maxRetries !== null ? model.maxRetries : '';
+    var temp = model ? model.temperature : null;
+    el('f-temp-mode').value = temp === null || temp === undefined ? '' : temp === 'omit' ? 'omit' : 'fixed';
+    el('f-temp').value = typeof temp === 'number' ? temp : '';
+    tempModeChanged();
     el('f-images').value = model && model.supportsImages !== null ? String(model.supportsImages) : '';
     el('f-insecure').checked = Boolean(model && model.allowUnauthorized);
 
@@ -1487,6 +1511,26 @@ legend { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transfo
     updateSlotPreview();
     el('dlg').showModal();
     el('f-display').focus();
+  }
+
+  // Auto / fixed / omit. Only "fixed" carries a number with it.
+  function tempModeChanged() {
+    var mode = el('f-temp-mode').value;
+    el('temp-value-field').hidden = mode !== 'fixed';
+    el('temp-note').textContent = mode === 'omit'
+      ? 'No temperature is sent, so the route applies its own. Use this for reasoning routes that reject the field.'
+      : mode === 'fixed'
+        ? 'Sent on every request, overriding the default the translator would pick.'
+        : 'Reasoning models get none; everything else gets 0.7 unless the IDE asks for another.';
+  }
+
+  /** Reads the temperature controls into the value the API stores. */
+  function temperatureInput() {
+    var mode = el('f-temp-mode').value;
+    if (mode === 'omit') return 'omit';
+    if (mode !== 'fixed') return undefined;
+    var raw = el('f-temp').value;
+    return raw === '' ? undefined : Number(raw);
   }
 
   function providerChanged() {
@@ -1506,6 +1550,7 @@ legend { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transfo
       externalModelName: el('f-ext').value.trim(),
       timeout: el('f-timeout').value ? Number(el('f-timeout').value) : undefined,
       maxRetries: el('f-retries').value ? Number(el('f-retries').value) : undefined,
+      temperature: temperatureInput(),
       allowUnauthorized: el('f-insecure').checked,
       supportsImages: images === '' ? undefined : images === 'true',
       keyAction: mode,
@@ -1696,6 +1741,7 @@ legend { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transfo
   el('f-display').addEventListener('input', updateSlotPreview);
   el('f-name').addEventListener('input', updateSlotPreview);
   el('f-provider').addEventListener('change', providerChanged);
+  el('f-temp-mode').addEventListener('change', tempModeChanged);
   el('key-modes').addEventListener('change', keyModeChanged);
   el('log-filter').addEventListener('input', renderLog);
   el('log-errors').addEventListener('change', renderLog);

@@ -258,15 +258,16 @@ entries in the dropdown.
       "timeout": 300000,                // ms, default 120000
       "maxRetries": 3,                  // default 3
       "allowUnauthorized": false,       // true only for self-signed TLS
-      "supportsImages": true            // override image-capability detection (see 2.4)
+      "supportsImages": true,           // override image-capability detection (see 2.4)
+      "temperature": "omit"             // a number pins it; "omit" sends none (see 2.7)
     }
   ]
 }
 ```
 
 **Valid providers:** `openai`, `anthropic`, `google`, `ollama`, `custom`, `openrouter`,
-`deepseek`, `groq`, `mistral`, `cerebras`, `kimi`, `fireworks`, `lmstudio`, `llamacpp`,
-`nvidia`
+`codex`, `deepseek`, `groq`, `mistral`, `cerebras`, `kimi`, `fireworks`, `lmstudio`,
+`llamacpp`, `nvidia`
 
 The provider determines the auth header and the request translation:
 
@@ -276,7 +277,15 @@ The provider determines the auth header and the request translation:
 | `google` | `x-goog-api-key` | Google |
 | `openrouter` | `Authorization: Bearer` + referer headers | OpenAI |
 | `ollama` | **none** | OpenAI |
+| `codex` | `Authorization: Bearer` | OpenAI **Responses** |
 | everything else (`openai`, `custom`, `nvidia`, ...) | `Authorization: Bearer` | OpenAI |
+
+`codex` is the odd one out: it is a third wire format, not a dialect of the other
+two. Endpoints ending in `/responses` take a top-level `instructions` string
+instead of a system message, a single `input` array holding messages *and* tool
+calls *and* tool results, and flat tool definitions. Pointing `openai` or
+`anthropic` at a `/responses` URL sends a body the endpoint rejects — usually
+with a 500, which reads like an outage rather than a config error.
 
 ## 2.2 Provider recipes
 
@@ -347,6 +356,30 @@ Use the **API host**, not the web console — e.g. `api.experientiallabs.ai`, si
 Verify the model still exists before trusting it — NVIDIA retires models and returns
 `410 Gone`:
 `curl -H "Authorization: Bearer nvapi-..." https://integrate.api.nvidia.com/v1/models`
+
+### kie.ai Codex / GPT-6 (Responses API)
+
+```json
+{
+  "name": "models/gpt-6-astra",
+  "displayName": "GPT 6 Astra",
+  "provider": "codex",
+  "apiKey": "...",
+  "apiUrl": "https://api.kie.ai/codex/v1/responses",
+  "externalModelName": "gpt-6-astra",
+  "timeout": 300000,
+  "maxRetries": 4
+}
+```
+
+Must be `provider: "codex"`. kie.ai serves these models **only** over the Responses
+API — there is no `/chat/completions` route for them, so `openai` and `custom` cannot
+reach them either. Model ids come from [kie.ai/market](https://kie.ai/market)
+(`gpt-6-astra`, `gpt-5.4-codex`, …).
+
+kie.ai returns intermittent `500` / `503` bodies (`"Service temporarily unavailable"`,
+`"please try again later"`) even on well-formed requests, so keep `maxRetries` at 4 —
+the proxy retries these and a first-attempt failure is normal rather than a misconfiguration.
 
 ### Anthropic (direct API key)
 
@@ -501,6 +534,32 @@ Note the rerouted request bills **your provider**, not your Google quota.
 
 ---
 
+## 2.7 Temperature
+
+By default the gateway picks: reasoning models (Claude 4/5, o-series, anything named
+`thinking` or `reasoning`) are sent **no** temperature, everything else gets whatever the
+IDE asked for, or `0.7`. Some gateway routes accept exactly one value and answer a
+request carrying any other with a `400`:
+
+```
+The value 0.7 for 'temperature' is not supported by this model route.
+Supported values are between 1.0 and 1.0.
+```
+
+The gateway recovers from that on its own — it re-sends once with the value the route
+named, or without the field. To settle it up front, set it per model, in the web console's
+**Advanced** section or in the file:
+
+```jsonc
+{ "temperature": 0.2 }      // pinned: sent on every request
+{ "temperature": "omit" }   // never sent; the route applies its own
+```
+
+Omit the field to keep the automatic behaviour. A number must be between 0 and 2, and it
+wins over the automatic choice in both directions.
+
+---
+
 ## Daily use
 
 ```bash
@@ -602,6 +661,7 @@ The console's log panel names the cause in almost every case;
 | `Upstream 429` on generation, but `fetchAvailableModels` returns 200 | Google account quota exhausted. Affects **all** built-in models (Gemini *and* built-in Claude) — one shared pool | Wait for reset, or use custom models |
 | Browser inspection or commit-message generation fails with 429 while a **custom** model is selected | Both run on a managed Google model the IDE picks itself (`browser_subagent`, `generate_commit_message`), not on your model | Pick one under **Subagent model** in the console — see [2.6](#26-browser-inspection-and-commit-messages-fail-with-429-subagentmodel) |
 | Custom model missing from dropdown | Invalid entry, or IDE not restarted | Check the log for `Skipping invalid model` |
+| `The value 0.7 for 'temperature' is not supported by this model route` | The route pins temperature to one value | The gateway retries once with the accepted value; pin or disable it per model to avoid the round trip — see [2.7](#27-temperature) |
 | `Your model does not support this media` | Capability inferred as text-only from the model name; the provider is not involved | Add `"supportsImages": true` — see 2.4 |
 | Wrong model answers | Two entries share a `name` | Make every `name` unique |
 | `DECRYPTION_FAILED_STORAGE_UNAVAILABLE` | Key is in the OS key store `enc:` format | Replace with the plaintext key — see 2.5 |

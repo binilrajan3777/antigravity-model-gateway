@@ -52,6 +52,9 @@ export function detectModelCapabilities(m: CustomModelConfig, includeDisplayName
     m.provider === 'anthropic' ||
     m.provider === 'openai' ||
     m.provider === 'openrouter' ||
+    // Responses-API endpoints exist to serve reasoning models; every model
+    // reachable over one takes a `reasoning.effort` parameter.
+    m.provider === 'codex' ||
     THINKING_PATTERN.test(nameLower) ||
     THINKING_PATTERN.test(extLower) ||
     (includeDisplayName && THINKING_PATTERN.test(displayLower));
@@ -74,6 +77,8 @@ export function detectModelCapabilities(m: CustomModelConfig, includeDisplayName
       :
     m.provider === 'anthropic' ||
     m.provider === 'google' ||
+    // The Responses API takes input_image parts on every model it serves.
+    m.provider === 'codex' ||
     (m.provider === 'openai' && IMAGE_SUPPORT_PATTERN.test(allNames)) ||
     (m.provider === 'openrouter' && IMAGE_SUPPORT_PATTERN.test(allNames)) ||
     (IMAGE_SUPPORT_PATTERN.test(allNames) && !NO_IMAGE_PATTERN.test(allNames));

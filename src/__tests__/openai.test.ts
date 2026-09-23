@@ -99,6 +99,13 @@ describe('mapGeminiToOpenAI', () => {
     expect(result.max_tokens).toBe(4000);
   });
 
+  it('should omit temperature for reasoning routes that reject it', () => {
+    const body = { contents: [], generationConfig: { temperature: 0.7 } };
+    for (const model of ['claude-opus-5.5', 'models/claude-opus-5.5', 'o3-mini', 'gpt-5.4-thinking']) {
+      expect(mapGeminiToOpenAI(body, model).temperature).toBeUndefined();
+    }
+  });
+
   it('should convert Gemini tools to OpenAI format', () => {
     const body = {
       contents: [],

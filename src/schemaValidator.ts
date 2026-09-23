@@ -32,6 +32,7 @@ const VALID_PROVIDERS = [
   'lmstudio',
   'llamacpp',
   'nvidia',
+  'codex',
 ];
 
 /**
@@ -87,6 +88,14 @@ export function validateCustomModel(model: unknown): ValidationResult {
   }
   if (m.supportsImages !== undefined && typeof m.supportsImages !== 'boolean') {
     return { valid: false, error: 'supportsImages must be a boolean' };
+  }
+  if (m.temperature !== undefined && m.temperature !== 'omit') {
+    if (typeof m.temperature !== 'number' || !Number.isFinite(m.temperature)) {
+      return { valid: false, error: 'temperature must be a number or "omit"' };
+    }
+    if (m.temperature < 0 || m.temperature > 2) {
+      return { valid: false, error: 'temperature must be between 0 and 2' };
+    }
   }
 
   return { valid: true };

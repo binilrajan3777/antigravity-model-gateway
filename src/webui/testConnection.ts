@@ -45,6 +45,16 @@ function buildProbeBody(model: CustomModel): string {
   if (isAnthropicShaped(model.provider)) {
     return JSON.stringify({ model: modelId, max_tokens: 1, messages });
   }
+  if (model.provider === 'codex') {
+    // Responses API: no `messages`, and a chat-shaped body is answered with a
+    // 500 rather than a 400 — which would read as "provider down" in the UI.
+    return JSON.stringify({
+      model: modelId,
+      input: [{ role: 'user', content: [{ type: 'input_text', text: 'ping' }] }],
+      reasoning: { effort: 'low' },
+      stream: false,
+    });
+  }
   return JSON.stringify({ model: modelId, max_tokens: 1, messages, stream: false });
 }
 

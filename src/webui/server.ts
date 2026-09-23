@@ -186,6 +186,7 @@ function parseModelInput(body: unknown): store.ModelInput {
     externalModelName: text('externalModelName'),
     timeout: num('timeout'),
     maxRetries: num('maxRetries'),
+    temperature: b.temperature === 'omit' ? 'omit' : num('temperature'),
     allowUnauthorized: bool('allowUnauthorized'),
     supportsImages: bool('supportsImages'),
     keyAction: keyAction === 'set' || keyAction === 'clear' || keyAction === 'keep' ? keyAction : 'keep',

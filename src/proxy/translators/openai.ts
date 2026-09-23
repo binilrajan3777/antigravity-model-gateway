@@ -5,6 +5,7 @@
 import * as path from 'path';
 
 import log from '../../logger';
+import { detectModelCapabilitiesByName } from '../modelUtils';
 import {
   fixParamTypes,
   translateToolCallToNative,
@@ -349,7 +350,12 @@ export function mapGeminiToOpenAI(geminiBody: GeminiRequestBody, modelName: stri
   const is5Pro = /(^|\/|^openai\/)(gpt-)?5\.5-pro/i.test(lowerName);
   const is5Thinking = /(^|\/|^openai\/)(gpt-)?5\.4/i.test(lowerName);
   const needsCompletionTokens = isThinkingModel || isReasoningModel || is41Model || is5Pro || is5Thinking;
-  const needsNoTemperature = isThinkingModel || isReasoningModel;
+  // Reasoning routes pin temperature to their own fixed value and reject any
+  // explicit one - including Claude 4/5 served over an OpenAI-compatible
+  // gateway, whose names say nothing about thinking. Leave the field out and
+  // let the route apply its default.
+  const needsNoTemperature =
+    isThinkingModel || isReasoningModel || detectModelCapabilitiesByName(modelName).isThinkingModel;
 
   const maxTokens = geminiBody.generationConfig?.maxOutputTokens ?? 4000;
   const payload: OpenAIRequestBody = {

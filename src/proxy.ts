@@ -31,6 +31,12 @@ export interface CustomModel {
   _slug?: string;
   timeout?: number;
   maxRetries?: number;
+  /**
+   * Overrides what the translator would send. A number pins that value,
+   * 'omit' sends no temperature at all — which is what reasoning routes that
+   * pin their own temperature require. Absent means the translator decides.
+   */
+  temperature?: number | 'omit';
 }
 
 interface GeminiRequestBody {
@@ -546,12 +552,83 @@ function parseRetryAfter(headers: Record<string, string | string[] | undefined>)
   return 0;
 }
 
+/**
+ * Applies the model's configured temperature to an already-translated payload.
+ *
+ * Done after translation so it beats whatever default the translator chose,
+ * in both directions: a number pins the value even on a model the translator
+ * would have left alone, and 'omit' strips it for routes that reject it.
+ * Google keeps the field nested under generationConfig; everyone else is flat.
+ */
+function applyTemperaturePreference(payload: Record<string, unknown>, model: CustomModel): void {
+  if (model.temperature === undefined) return;
+
+  const generationConfig = payload.generationConfig as Record<string, unknown> | undefined;
+  const nested = generationConfig !== undefined;
+
+  if (model.temperature === 'omit') {
+    delete payload.temperature;
+    if (nested) delete generationConfig.temperature;
+    return;
+  }
+  if (nested) generationConfig.temperature = model.temperature;
+  else payload.temperature = model.temperature;
+}
+
+/** Value in a param-override map meaning "drop this field from the payload". */
+const DROP_PARAM = Symbol('drop-param');
+
+const UNSUPPORTED_PARAM_PATTERN = /not supported|unsupported|does not support|not allowed|unrecognized|invalid value/i;
+
+/**
+ * Works out how to fix a payload a provider rejected with a 400 over one
+ * parameter, e.g. `temperature` on a route that pins it to a single value.
+ *
+ * Retrying such a request unchanged can only fail again, so we either pin the
+ * one value the route accepts or drop the field and let its default apply.
+ * Returns null when the error is not a recoverable parameter complaint.
+ */
+function deriveParamOverride(
+  errorBody: string,
+  payload: Record<string, unknown>,
+): { param: string; value: unknown } | null {
+  let param = '';
+  let message = errorBody;
+  try {
+    const parsed = JSON.parse(errorBody) as { error?: { param?: string; message?: string } };
+    param = parsed.error?.param || '';
+    message = parsed.error?.message || errorBody;
+  } catch {
+    /* Not every gateway answers with JSON - fall back to the raw body. */
+  }
+  if (!UNSUPPORTED_PARAM_PATTERN.test(message)) return null;
+
+  if (!param) {
+    // Gateways that omit `param` still name the field in the message.
+    for (const candidate of Object.keys(payload)) {
+      if (new RegExp(`['"\`]${candidate}['"\`]`).test(message)) {
+        param = candidate;
+        break;
+      }
+    }
+  }
+  if (!param || !(param in payload)) return null;
+
+  // "Supported values are between 1.0 and 1.0" - the route accepts exactly one.
+  const range = message.match(/between\s+(-?\d+(?:\.\d+)?)\s+and\s+(-?\d+(?:\.\d+)?)/i);
+  if (range && range[1] === range[2] && typeof payload[param] === 'number') {
+    return { param, value: Number(range[1]) };
+  }
+  return { param, value: DROP_PARAM };
+}
+
 function handleCustomModelRequest(
   res: http.ServerResponse,
   model: CustomModel,
   geminiBody: GeminiRequestBody,
   isStream: boolean,
   retryCount = 0,
+  paramOverrides: Map<string, unknown> = new Map(),
 ): void {
   // A cancelled turn must not keep burning provider quota. Without this the
   // retry ladder below happily re-fires against a client that is long gone.
@@ -566,11 +643,20 @@ function handleCustomModelRequest(
 
   const provider = model.provider === 'custom' || model.provider === 'openrouter' ? 'openai' : model.provider;
 
-  const payload = registry.translateRequest(provider, geminiBody, model.externalModelName);
+  const payload = registry.translateRequest(provider, geminiBody, model.externalModelName) as Record<
+    string,
+    unknown
+  >;
+  applyTemperaturePreference(payload, model);
+  // Corrections learned from earlier 400s on this same request.
+  for (const [key, value] of paramOverrides) {
+    if (value === DROP_PARAM) delete payload[key];
+    else payload[key] = value;
+  }
   const headers = registry.getProviderHeaders(provider, model.apiKey);
 
   if (isStream && registry.supportsStreaming(provider)) {
-    (payload as Record<string, unknown>).stream = true;
+    payload.stream = true;
   }
 
   let finalUrlStr = model.apiUrl;
@@ -630,9 +716,26 @@ function handleCustomModelRequest(
         apiRes.on('data', (chunk: Buffer) => errorBody += chunk.toString());
         apiRes.on('end', () => {
           log.error(`[Proxy] Stream API error (${apiRes.statusCode}) for ${model.name}: ${errorBody.substring(0, 300)}`);
-          if (retryCount < MAX_RETRIES) {
+
+          const override =
+            apiRes.statusCode === 400 && paramOverrides.size < 4 ? deriveParamOverride(errorBody, payload) : null;
+          if (override && !paramOverrides.has(override.param)) {
+            const next = new Map(paramOverrides).set(override.param, override.value);
+            log.warn(
+              `[Proxy] ${model.name} rejected '${override.param}'; retrying ${
+                override.value === DROP_PARAM ? 'without it' : `with ${String(override.value)}`
+              }...`,
+            );
+            handleCustomModelRequest(res, model, geminiBody, isStream, retryCount, next);
+            return;
+          }
+
+          // Other 4xx answers are deterministic - repeating the same payload
+          // only delays the error the client needs to see.
+          const worthRetrying = apiRes.statusCode === 429 || apiRes.statusCode! >= 500;
+          if (worthRetrying && retryCount < MAX_RETRIES) {
             log.warn(`[Proxy] Stream error, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
-            setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1), 1000 * (retryCount + 1));
+            setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1, paramOverrides), 1000 * (retryCount + 1));
             return;
           }
           res.writeHead(apiRes.statusCode!, { 'Content-Type': 'application/json' });
@@ -728,7 +831,7 @@ function handleCustomModelRequest(
           log.warn(
             `[Proxy] Server error ${apiRes.statusCode} for ${model.name}, retrying in ${delay}ms (${retryCount + 1}/${MAX_RETRIES})...`,
           );
-          setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1), delay);
+          setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1, paramOverrides), delay);
           return;
         }
 
@@ -739,13 +842,27 @@ function handleCustomModelRequest(
           log.warn(
             `[Proxy] Rate limited (429) for ${model.name}, retrying in ${delay}ms (${retryCount + 1}/${MAX_RETRIES})...`,
           );
-          setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1), delay);
+          setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1, paramOverrides), delay);
           return;
         }
 
         if (apiRes.statusCode! >= 400) {
           // P0-3: Only log status code and model name, NOT response body content
           log.error(`[Proxy] API error (${apiRes.statusCode}) for ${model.name}`);
+
+          const override =
+            apiRes.statusCode === 400 && paramOverrides.size < 4 ? deriveParamOverride(body, payload) : null;
+          if (override && !paramOverrides.has(override.param)) {
+            const next = new Map(paramOverrides).set(override.param, override.value);
+            log.warn(
+              `[Proxy] ${model.name} rejected '${override.param}'; retrying ${
+                override.value === DROP_PARAM ? 'without it' : `with ${String(override.value)}`
+              }...`,
+            );
+            handleCustomModelRequest(res, model, geminiBody, isStream, retryCount, next);
+            return;
+          }
+
           res.writeHead(apiRes.statusCode!, { 'Content-Type': 'application/json' });
           res.end(body);
           return;
@@ -782,7 +899,7 @@ function handleCustomModelRequest(
           if (retryCount < MAX_RETRIES) {
             log.warn(`[Proxy] Parse error for ${model.name}, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
             setTimeout(
-              () => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1),
+              () => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1, paramOverrides),
               1000 * (retryCount + 1),
             );
             return;
@@ -812,7 +929,7 @@ function handleCustomModelRequest(
     if (retryCount < MAX_RETRIES) {
       log.warn(`[Proxy] Timeout for ${model.name}, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
       setTimeout(
-        () => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1),
+        () => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1, paramOverrides),
         1000 * (retryCount + 1),
       );
       return;
@@ -830,7 +947,7 @@ function handleCustomModelRequest(
     if (retryCount < MAX_RETRIES) {
       log.warn(`[Proxy] Network error for ${model.name}, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
       setTimeout(
-        () => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1),
+        () => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1, paramOverrides),
         1000 * (retryCount + 1),
       );
       return;

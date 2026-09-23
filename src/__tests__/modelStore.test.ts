@@ -138,6 +138,27 @@ describe('createModel', () => {
     expect(() => createModel({ ...OLLAMA, provider: 'bogus', keyAction: 'keep' })).toThrow(/provider/i);
   });
 
+  it('stores a fixed temperature and surfaces it in the view', () => {
+    const snap = createModel({ ...OLLAMA, temperature: 0.2, keyAction: 'keep' });
+    expect(snap.models[0].temperature).toBe(0.2);
+    expect(JSON.parse(fs.readFileSync(modelsPath, 'utf-8')).models[0].temperature).toBe(0.2);
+  });
+
+  it("stores 'omit' for routes that reject a temperature", () => {
+    const snap = createModel({ ...OLLAMA, temperature: 'omit', keyAction: 'keep' });
+    expect(snap.models[0].temperature).toBe('omit');
+  });
+
+  it('leaves temperature unset when none is given, keeping auto-detection', () => {
+    const snap = createModel({ ...OLLAMA, keyAction: 'keep' });
+    expect(snap.models[0].temperature).toBeNull();
+    expect(JSON.parse(fs.readFileSync(modelsPath, 'utf-8')).models[0]).not.toHaveProperty('temperature');
+  });
+
+  it('rejects a temperature outside the accepted range', () => {
+    expect(() => createModel({ ...OLLAMA, temperature: 5, keyAction: 'keep' })).toThrow(/temperature/i);
+  });
+
   it('sets and clears the subagent model through the store', () => {
     createModel({ ...OLLAMA, keyAction: 'keep' });
 
